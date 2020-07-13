@@ -109,4 +109,34 @@ class Surface(ttk.Frame):
             r, roi, color = self.predictor.predict(img_bgr)
             self.show_roi(r, roi, color)
 
+        def vedio_thread(self):
+            self.thread_run = True
+            predict_time = time.time()
+            while self.thread_run:
+                _, img_bgr = self.camera.read()
+                self.imgtk = self.get_imgtk(img_bgr)
+                self.image_ctl.configure(image=self.imgtk)
+                if time.time() - predict_time > 2:
+                    r, roi, color = self.predictor.predict(img_bgr)
+                    self.show_roi(r, roi, color)
+                    predict_time = time.time()
+            print("run end")
+
+
+def close_window():
+    print("destroy")
+    if surface.thread_run:
+        surface.thread_run = False
+        surface.thread.join(2.0)
+    win.destroy()
+
+
+if __name__ == '__main__':
+    win = tk.Tk()
+
+    surface = Surface(win)
+    win.protocol('WM_DELETE_WINDOW', close_window)
+    win.mainloop()
+
+
 
