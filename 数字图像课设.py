@@ -7,6 +7,7 @@ from PIL import Image, ImageTk
 import threading
 import time
 
+#界面.py文件
 
 class Surface(ttk.Frame):          #界面
     pic_path = ""
