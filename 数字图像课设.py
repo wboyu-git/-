@@ -8,7 +8,7 @@ import threading
 import time
 
 
-class Surface(ttk.Frame):
+class Surface(ttk.Frame):          #界面
     pic_path = ""
     viewhigh = 600
     viewwide = 600
@@ -123,7 +123,7 @@ class Surface(ttk.Frame):
             print("run end")
 
 
-def close_window():
+def close_window():      #关闭窗户
     print("destroy")
     if surface.thread_run:
         surface.thread_run = False
