@@ -322,3 +322,133 @@ def predict(self, car_pic):
 
     print("精确定位")
     card_imgs = []
+    # 矩形区域可能是倾斜的矩形，需要矫正，以便使用颜色定位
+    for rect in car_contours:
+        if rect[2] > -1 and rect[2] < 1:  # 创造角度，使得左、高、右、低拿到正确的值
+            angle = 1
+        else:
+            angle = rect[2]
+        rect = (rect[0], (rect[1][0] + 5, rect[1][1] + 5), angle)  # 扩大范围，避免车牌边缘被排除
+
+        box = cv2.boxPoints(rect)
+        heigth_point = right_point = [0, 0]
+        left_point = low_point = [pic_width, pic_hight]
+        for point in box:
+            if left_point[0] > point[0]:
+                left_point = point
+            if low_point[1] > point[1]:
+                low_point = point
+            if heigth_point[1] < point[1]:
+                heigth_point = point
+            if right_point[0] < point[0]:
+                right_point = point
+
+        if left_point[1] <= right_point[1]:  # 正角度
+            new_right_point = [right_point[0], heigth_point[1]]
+            pts2 = np.float32([left_point, heigth_point, new_right_point])  # 字符只是高度需要改变
+            pts1 = np.float32([left_point, heigth_point, right_point])
+            M = cv2.getAffineTransform(pts1, pts2)
+            dst = cv2.warpAffine(oldimg, M, (pic_width, pic_hight))
+            point_limit(new_right_point)
+            point_limit(heigth_point)
+            point_limit(left_point)
+            card_img = dst[int(left_point[1]):int(heigth_point[1]), int(left_point[0]):int(new_right_point[0])]
+            card_imgs.append(card_img)
+        # cv2.imshow("card", card_img)
+        # cv2.waitKey(0)
+        elif left_point[1] > right_point[1]:  # 负角度
+
+            new_left_point = [left_point[0], heigth_point[1]]
+            pts2 = np.float32([new_left_point, heigth_point, right_point])  # 字符只是高度需要改变
+            pts1 = np.float32([left_point, heigth_point, right_point])
+            M = cv2.getAffineTransform(pts1, pts2)
+            dst = cv2.warpAffine(oldimg, M, (pic_width, pic_hight))
+            point_limit(right_point)
+            point_limit(heigth_point)
+            point_limit(new_left_point)
+            card_img = dst[int(right_point[1]):int(heigth_point[1]), int(new_left_point[0]):int(right_point[0])]
+            card_imgs.append(card_img)
+        # cv2.imshow("card", card_img)
+        # cv2.waitKey(0)
+    # 开始使用颜色定位，排除不是车牌的矩形，目前只识别蓝、绿、黄车牌
+    colors = []
+    for card_index, card_img in enumerate(card_imgs):
+        green = yello = blue = black = white = 0
+        card_img_hsv = cv2.cvtColor(card_img, cv2.COLOR_BGR2HSV)
+        # 有转换失败的可能，原因来自于上面矫正矩形出错
+        if card_img_hsv is None:
+            continue
+        row_num, col_num = card_img_hsv.shape[:2]
+        card_img_count = row_num * col_num
+
+        for i in range(row_num):
+            for j in range(col_num):
+                H = card_img_hsv.item(i, j, 0)
+                S = card_img_hsv.item(i, j, 1)
+                V = card_img_hsv.item(i, j, 2)
+                if 11 < H <= 34 and S > 34:  # 图片分辨率调整
+                    yello += 1
+                elif 35 < H <= 99 and S > 34:  # 图片分辨率调整
+                    green += 1
+                elif 99 < H <= 124 and S > 34:  # 图片分辨率调整
+                    blue += 1
+
+                if 0 < H < 180 and 0 < S < 255 and 0 < V < 46:
+                    black += 1
+                elif 0 < H < 180 and 0 < S < 43 and 221 < V < 225:
+                    white += 1
+        color = "no"
+
+        limit1 = limit2 = 0
+        if yello * 2 >= card_img_count:
+            color = "yello"
+            limit1 = 11
+            limit2 = 34  # 有的图片有色偏偏绿
+        elif green * 2 >= card_img_count:
+            color = "green"
+            limit1 = 35
+            limit2 = 99
+        elif blue * 2 >= card_img_count:
+            color = "blue"
+            limit1 = 100
+            limit2 = 124  # 有的图片有色偏偏紫
+        elif black + white >= card_img_count * 0.7:  # TODO
+            color = "bw"
+        print(color)
+        colors.append(color)
+        print(blue, green, yello, black, white, card_img_count)
+        # cv2.imshow("color", card_img)
+        # cv2.waitKey(0)
+        if limit1 == 0:
+            continue
+        # 以上为确定车牌颜色
+        # 以下为根据车牌颜色再定位，缩小边缘非车牌边界
+        xl, xr, yh, yl = self.accurate_place(card_img_hsv, limit1, limit2, color)
+        if yl == yh and xl == xr:
+            continue
+        need_accurate = False
+        if yl >= yh:
+            yl = 0
+            yh = row_num
+            need_accurate = True
+        if xl >= xr:
+            xl = 0
+            xr = col_num
+            need_accurate = True
+        card_imgs[card_index] = card_img[yl:yh, xl:xr] if color != "green" or yl < (yh - yl) // 4 else card_img[yl - (
+                    yh - yl) // 4:yh, xl:xr]
+        if need_accurate:  # 可能x或y方向未缩小，需要再试一次
+            card_img = card_imgs[card_index]
+            card_img_hsv = cv2.cvtColor(card_img, cv2.COLOR_BGR2HSV)
+            xl, xr, yh, yl = self.accurate_place(card_img_hsv, limit1, limit2, color)
+            if yl == yh and xl == xr:
+                continue
+            if yl >= yh:
+                yl = 0
+                yh = row_num
+            if xl >= xr:
+                xl = 0
+                xr = col_num
+        card_imgs[card_index] = card_img[yl:yh, xl:xr] if color != "green" or yl < (yh - yl) // 4 else card_img[yl - (
+                    yh - yl) // 4:yh, xl:xr]
+# 以上为车牌定位
