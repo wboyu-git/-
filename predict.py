@@ -121,3 +121,141 @@ provinces = [
     "zh_zang", "藏",
     "zh_zhe", "浙"
 ]
+
+
+class StatModel(object):
+    def load(self, fn):
+        self.model = self.model.load(fn)
+
+    def save(self, fn):
+        self.model.save(fn)
+
+
+class SVM(StatModel):
+    def __init__(self, C=1, gamma=0.5):
+        self.model = cv2.ml.SVM_create()
+        self.model.setGamma(gamma)
+        self.model.setC(C)
+        self.model.setKernel(cv2.ml.SVM_RBF)
+        self.model.setType(cv2.ml.SVM_C_SVC)
+
+    # 训练svm
+    def train(self, samples, responses):
+        self.model.train(samples, cv2.ml.ROW_SAMPLE, responses)
+
+    # 字符识别
+    def predict(self, samples):
+        r = self.model.predict(samples)
+        return r[1].ravel()
+
+
+class CardPredictor:
+    def __init__(self):
+        # 车牌识别的部分参数保存在js中，便于根据图片分辨率做调整
+        f = open('config.js')
+        j = json.load(f)
+        for c in j["config"]:
+            if c["open"]:
+                self.cfg = c.copy()
+                break
+        else:
+            raise RuntimeError('没有设置有效配置参数')
+
+    def __del__(self):
+        self.save_traindata()
+
+    def train_svm(self):
+        # 识别英文字母和数字
+        self.model = SVM(C=1, gamma=0.5)
+        # 识别中文
+        self.modelchinese = SVM(C=1, gamma=0.5)
+        if os.path.exists("svm.dat"):
+            self.model.load("svm.dat")
+        else:
+            chars_train = []
+            chars_label = []
+
+            for root, dirs, files in os.walk("train\\chars2"):
+                if len(os.path.basename(root)) > 1:
+                    continue
+                root_int = ord(os.path.basename(root))
+                for filename in files:
+                    filepath = os.path.join(root, filename)
+                    digit_img = cv2.imread(filepath)
+                    digit_img = cv2.cvtColor(digit_img, cv2.COLOR_BGR2GRAY)
+                    chars_train.append(digit_img)
+                    # chars_label.append(1)
+                    chars_label.append(root_int)
+
+            chars_train = list(map(deskew, chars_train))
+            chars_train = preprocess_hog(chars_train)
+            # chars_train = chars_train.reshape(-1, 20, 20).astype(np.float32)
+            chars_label = np.array(chars_label)
+            print(chars_train.shape)
+            self.model.train(chars_train, chars_label)
+        if os.path.exists("svmchinese.dat"):
+            self.modelchinese.load("svmchinese.dat")
+        else:
+            chars_train = []
+            chars_label = []
+            for root, dirs, files in os.walk("train\\charsChinese"):
+                if not os.path.basename(root).startswith("zh_"):
+                    continue
+                pinyin = os.path.basename(root)
+                index = provinces.index(pinyin) + PROVINCE_START + 1  # 1是拼音对应的汉字
+                for filename in files:
+                    filepath = os.path.join(root, filename)
+                    digit_img = cv2.imread(filepath)
+                    digit_img = cv2.cvtColor(digit_img, cv2.COLOR_BGR2GRAY)
+                    chars_train.append(digit_img)
+                    # chars_label.append(1)
+                    chars_label.append(index)
+            chars_train = list(map(deskew, chars_train))
+            chars_train = preprocess_hog(chars_train)
+            # chars_train = chars_train.reshape(-1, 20, 20).astype(np.float32)
+            chars_label = np.array(chars_label)
+            print(chars_train.shape)
+            self.modelchinese.train(chars_train, chars_label)
+
+    def save_traindata(self):
+        if not os.path.exists("svm.dat"):
+            self.model.save("svm.dat")
+        if not os.path.exists("svmchinese.dat"):
+            self.modelchinese.save("svmchinese.dat")
+
+    def accurate_place(self, card_img_hsv, limit1, limit2, color):
+        row_num, col_num = card_img_hsv.shape[:2]
+        xl = col_num
+        xr = 0
+        yh = 0
+        yl = row_num
+        # col_num_limit = self.cfg["col_num_limit"]
+        row_num_limit = self.cfg["row_num_limit"]
+        col_num_limit = col_num * 0.8 if color != "green" else col_num * 0.5  # 绿色有渐变
+        for i in range(row_num):
+            count = 0
+            for j in range(col_num):
+                H = card_img_hsv.item(i, j, 0)
+                S = card_img_hsv.item(i, j, 1)
+                V = card_img_hsv.item(i, j, 2)
+                if limit1 < H <= limit2 and 34 < S and 46 < V:
+                    count += 1
+            if count > col_num_limit:
+                if yl > i:
+                    yl = i
+                if yh < i:
+                    yh = i
+        for j in range(col_num):
+            count = 0
+            for i in range(row_num):
+                H = card_img_hsv.item(i, j, 0)
+                S = card_img_hsv.item(i, j, 1)
+                V = card_img_hsv.item(i, j, 2)
+                if limit1 < H <= limit2 and 34 < S and 46 < V:
+                    count += 1
+            if count > row_num - row_num_limit:
+                if xl > j:
+                    xl = j
+                if xr < j:
+                    xr = j
+        return xl, xr, yh, yl
